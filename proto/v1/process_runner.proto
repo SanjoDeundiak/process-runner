@@ -1,0 +1,116 @@
+syntax = "proto3";
+
+package proto.v1;
+
+option go_package = "github.com/SanjoDeundiak/process-runner/proto/v1;protov1";
+
+// All fields are optional per proto3 recommendations. Client and server should check correctness of data.
+
+// API of the service that allows to start/stop/monitor processes.
+service ProcessRunnerService {
+  // Start a new process and returns its status
+  rpc Start(StartRequest) returns (StartResponse);
+  // Get a process status
+  rpc Status(StatusRequest) returns (StatusResponse);
+  // Stop a process
+  rpc Stop(StopRequest) returns (StopResponse);
+  // List all processes started by the service
+  rpc List(ListRequest) returns (ListResponse);
+  // Stream output of a process. The default behavior is full replay from the beginning, with a future flag to tail only.
+  rpc GetOutput(GetOutputRequest) returns (stream GetOutputResponse);
+  // Might add a separate call that both starts a new process and streams the output
+}
+
+message StartRequest {
+  // Command to execute
+  string command = 1;
+  // Command arguments
+  repeated string args = 2;
+  // Might add user-friendly name for a process, add env vars, working dir
+}
+
+message StartResponse {
+  Process response = 1;
+}
+
+message StatusRequest {
+  ProcessIdentifier process_identifier = 1;
+}
+
+message StatusResponse {
+  ProcessStatus process_status = 1;
+}
+
+message StopRequest {
+  ProcessIdentifier process_identifier = 1;
+  // Signal to use to stop the process.
+  Signal signal = 2;
+}
+
+message StopResponse {
+  ProcessStatus process_status = 1;
+}
+
+message ListRequest {}
+
+message ListResponse {
+  repeated Process processes = 1;
+}
+
+message GetOutputRequest {
+  ProcessIdentifier process_identifier = 1;
+}
+
+// Chunk of the output
+message GetOutputResponse {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    TYPE_STDOUT = 1;
+    TYPE_STDERR = 2;
+  }
+  // The type of the stream
+  Type type = 1;
+  // Binary chunk of the stream
+  bytes data = 2;
+  // gRPC streaming guarantees ordering, so don't need any chunk numeration on this level
+}
+
+// Unique identifier of the process.
+message ProcessIdentifier {
+  // Service generates a random identifier for each started process for client to be able to reference it in other calls.
+  string id = 1;
+}
+
+// Process id and status
+message Process {
+  ProcessIdentifier id = 1;
+  ProcessStatus status = 2;
+}
+
+// Signal that will be sent to the process to stop it
+enum Signal {
+  SIGNAL_UNSPECIFIED = 0;
+  SIGNAL_SIGTERM = 1;
+  SIGNAL_SIGKILL = 2;
+}
+
+// Process state
+enum ProcessState {
+  PROCESS_STATE_UNSPECIFIED = 0;
+  PROCESS_STATE_RUNNING = 1;
+  PROCESS_STATE_SLEEPING = 2;
+  PROCESS_STATE_STOPPED = 3;
+  PROCESS_STATE_ZOMBIE = 4;
+}
+
+// Status of a process
+message ProcessStatus {
+  // Command that was used to start the process
+  string command = 1;
+  ProcessState state = 2;
+  int32 exit_code = 3;
+  int64 start_time = 4;
+  int64 end_time = 5;
+  // Might add a lot of information here: CWD, resource usage, etc.
+  // PID is consciously not sent to the client
+}
