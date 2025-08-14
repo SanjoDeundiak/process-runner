@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package proto.v1;
 
+import "google/protobuf/timestamp.proto";
+
 option go_package = "github.com/SanjoDeundiak/process-runner/proto/v1;protov1";
 
 // All fields are optional per proto3 recommendations. Client and server should check correctness of data.
@@ -12,13 +14,10 @@ service ProcessRunnerService {
   rpc Start(StartRequest) returns (StartResponse);
   // Get a process status
   rpc Status(StatusRequest) returns (StatusResponse);
-  // Stop a process
+  // Stop a process using SIGKILL
   rpc Stop(StopRequest) returns (StopResponse);
-  // List all processes started by the service
-  rpc List(ListRequest) returns (ListResponse);
   // Stream output of a process. The default behavior is full replay from the beginning, with a future flag to tail only.
   rpc GetOutput(GetOutputRequest) returns (stream GetOutputResponse);
-  // Might add a separate call that both starts a new process and streams the output
 }
 
 message StartRequest {
@@ -26,11 +25,11 @@ message StartRequest {
   string command = 1;
   // Command arguments
   repeated string args = 2;
-  // Might add user-friendly name for a process, add env vars, working dir
 }
 
 message StartResponse {
-  Process response = 1;
+  ProcessIdentifier process_identifier = 1;
+  ProcessStatus status = 2;
 }
 
 message StatusRequest {
@@ -38,23 +37,17 @@ message StatusRequest {
 }
 
 message StatusResponse {
-  ProcessStatus process_status = 1;
+  ProcessIdentifier identifier = 1;
+  Process process = 2;
+  ProcessStatus status = 3;
 }
 
 message StopRequest {
   ProcessIdentifier process_identifier = 1;
-  // Signal to use to stop the process.
-  Signal signal = 2;
 }
 
 message StopResponse {
   ProcessStatus process_status = 1;
-}
-
-message ListRequest {}
-
-message ListResponse {
-  repeated Process processes = 1;
 }
 
 message GetOutputRequest {
@@ -83,15 +76,10 @@ message ProcessIdentifier {
 
 // Process id and status
 message Process {
-  ProcessIdentifier id = 1;
-  ProcessStatus status = 2;
-}
-
-// Signal that will be sent to the process to stop it
-enum Signal {
-  SIGNAL_UNSPECIFIED = 0;
-  SIGNAL_SIGTERM = 1;
-  SIGNAL_SIGKILL = 2;
+  // Command that was used to start the process
+  string command = 1;
+  // Command arguments
+  repeated string args = 2;
 }
 
 // Process state
@@ -105,12 +93,10 @@ enum ProcessState {
 
 // Status of a process
 message ProcessStatus {
-  // Command that was used to start the process
-  string command = 1;
-  ProcessState state = 2;
-  int32 exit_code = 3;
-  int64 start_time = 4;
-  int64 end_time = 5;
+  ProcessState state = 1;
+  optional int32 exit_code = 2;
+  google.protobuf.Timestamp start_time = 3;
+  google.protobuf.Timestamp end_time = 4;
   // Might add a lot of information here: CWD, resource usage, etc.
   // PID is consciously not sent to the client
 }

@@ -14,7 +14,7 @@
 ## Design
 
 The service should:
-- be able to start a process by command, list processes, get status, stop a process
+- be able to start a process by command, get status, stop a process
 - be able to stream its stdout/stderr from the beginning. Output is binary and may or may not be a valid UTF-8 string.
 - support multiple concurrent subscribers to output, with efficient, non‑polling delivery.
 - apply per‑process resource limits (CPU, memory, disk I/O) on Linux using cgroups (v2).
@@ -124,16 +124,12 @@ The CLI should:
 4. Wire up I/O - create pipes for stdout&stderr, wrap with a ring buffer (e.g., 10–50 MB).
 5. Track process via `pidfd`.
 
-### Stopping a job (graceful then hard)
+### Stopping a job
 
-1. SIGTERM the process group, allowing app shutdown hooks.
-2. Timeout (e.g., 10s), keep streaming logs.
-3. If still alive, SIGKILL the cgroup:
-    - Preferred: write 1 to cgroup.kill (kills all descendants atomically).
-    - Fallback: kill(-pgid, SIGKILL).
-4. Wait for `pidfd` to signal exit, collect status, usage.
-5. Cleanup: purge cgroup, finalize logs.
-6. Leverage Reaper notion to avoid zombies.
+1. Write 1 to cgroup.kill (kills all descendants atomically).
+2. Wait for `pidfd` to signal exit, collect status, usage.
+3. Cleanup: purge cgroup, finalize logs.
+4. Leverage Reaper notion to avoid zombies.
 
 ## Error handling
 Error handling should align with
