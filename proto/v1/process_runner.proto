@@ -28,22 +28,22 @@ message StartRequest {
 }
 
 message StartResponse {
-  ProcessIdentifier process_identifier = 1;
+  string process_identifier = 1;
   ProcessStatus status = 2;
 }
 
 message StatusRequest {
-  ProcessIdentifier process_identifier = 1;
+  string process_identifier = 1;
 }
 
 message StatusResponse {
-  ProcessIdentifier identifier = 1;
+  string identifier = 1;
   Process process = 2;
   ProcessStatus status = 3;
 }
 
 message StopRequest {
-  ProcessIdentifier process_identifier = 1;
+  string process_identifier = 1;
 }
 
 message StopResponse {
@@ -51,7 +51,7 @@ message StopResponse {
 }
 
 message GetOutputRequest {
-  ProcessIdentifier process_identifier = 1;
+  string process_identifier = 1;
 }
 
 // Chunk of the output
@@ -66,12 +66,6 @@ message GetOutputResponse {
   // Binary chunk of the stream
   bytes data = 2;
   // gRPC streaming guarantees ordering, so don't need any chunk numeration on this level
-}
-
-// Unique identifier of the process.
-message ProcessIdentifier {
-  // Service generates a random identifier for each started process for client to be able to reference it in other calls.
-  string id = 1;
 }
 
 // Process id and status

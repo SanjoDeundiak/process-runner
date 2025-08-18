@@ -1,7 +1,5 @@
 # Design
 
-> Items marked with “*” are production‑grade improvements not planned for the interview submission.
-
 ## Scope
 
 - Design a minimal library that allows
@@ -14,21 +12,19 @@
 ## Design
 
 The service should:
-- be able to start a process by command, get status, stop a process
-- be able to stream its stdout/stderr from the beginning. Output is binary and may or may not be a valid UTF-8 string.
+- be able to start a process given a command and arguments; get status; stop a process.
+- be able to stream process' stdout/stderr from the beginning. Output is binary and may or may not be a valid UTF-8 string.
 - support multiple concurrent subscribers to output, with efficient, non‑polling delivery.
-- apply per‑process resource limits (CPU, memory, disk I/O) on Linux using cgroups (v2).
-- have authentication via mutual TLS.
-- have authorization via certificate pinning.
+- have authentication implemented using mutual TLS.
+- have authorization implemented using RBAC.
 - remain stateless across restarts (no persistence).
 - serve its API using [this gRPC spec](proto/v1/process_runner.proto).
 - stop all processes and clean all resources on shutdown.
-- `*` have Dockerfile for deployment.
-- `*` use secure key management (e.g., OS keyring/KMS).
 
 The library should:
 - provide a nice Go API for working with processes.
 - expose all the functionality that the service needs.
+- apply per‑process resource limits (CPU, memory, disk I/O) on Linux using cgroups (v2).
 
 The CLI should:
 - wrap the service client in a nice user experience.
@@ -40,15 +36,15 @@ The CLI should:
 ### Examples
 - Start
     ```sh
-    prn start "ping google.com" --client-cert ./client.pem --server-cert ./server.pem
+    prn start -- ping google.com
     > fcd2310e7b9a462a5d88c3a0ff4e2d9b # prints process_id (not PID)
     ```
   > This command is not idempotent and CLI doesn't implement retries. In case of a failure, the user is responsible
-  for figuring out if the process was started or not (e.g., by calling `list` command).
+  for figuring out if the process was started or not (e.g., by calling `list` command that should be added in the future).
 
 - Status
     ```sh
-    prn status fcd2310e7b9a462a5d88c3a0ff4e2d9b --client-cert ./client.pem --server-cert ./server.pem
+    prn status fcd2310e7b9a462a5d88c3a0ff4e2d9b
   
     +--------------------------------------------+-----------------+
     |                  ID              |  STATE  |     COMMAND     |
@@ -59,7 +55,7 @@ The CLI should:
 
 - Logs (full replay)
     ```sh
-    prn logs fcd2310e7b9a462a5d88c3a0ff4e2d9b --client-cert ./client.pem --server-cert ./server.pem
+    prn logs fcd2310e7b9a462a5d88c3a0ff4e2d9b
   
     PING google.com (142.250.203.142): 56 data bytes
     64 bytes from 142.250.203.142: icmp_seq=0 ttl=118 time=6.417 ms
@@ -70,7 +66,7 @@ The CLI should:
 
 - Stop
     ```sh
-    prn stop fcd2310e7b9a462a5d88c3a0ff4e2d9b --client-cert ./client.pem --server-cert ./server.pem
+    prn stop fcd2310e7b9a462a5d88c3a0ff4e2d9b
   
     +--------------------------------------------+-----------------+
     |                  ID              |  STATE  |     COMMAND     |
@@ -80,31 +76,17 @@ The CLI should:
     ```
   > This command is idempotent.
 
-- List
-    ```sh
-    prn list --client-cert ./client.pem --server-cert ./server.pem
-  
-    +--------------------------------------------+-----------------+
-    |                  ID              |  STATE  |     COMMAND     |
-    +----------------------------------+---------+-----------------+
-    | fcd2310e7b9a462a5d88c3a0ff4e2d9b | Running | ping google.com |
-    | a3e56c1fb29d8a5477c2f819ef34a65d | Running | top             |
-    +----------------------------------+---------+-----------------+
-    ```
-
 - Server start
     ```sh
-    prn server start \
-      --server-cert ./server.pem \
-      --client-cert ./client1.pem \
-      --client-cert ./client2.pem \
-      --client-cert ./client3.pem
+    prn server start
   
     > Listening on 127.0.0.1:50051
     ```
 
 ### Environment variables
 - `PRN_TLS_KEY` is expected to contain the TLS secret key in PKCS#8 format.
+- `PRN_TLS_CERT` is expected to contain the TLS certificate in `.pem` format.
+- `PRN_TLS_CA` is expected to contain the TLS CA certificate in `.pem` format.
 - `PRN_ADDRESS` can be used to change the address of the server (defaults to `127.0.0.1:50051`)
 
 ## Process execution lifecycle
@@ -112,21 +94,31 @@ The CLI should:
 ### Starting a process
 
 1. Allocate id and a working dir
-    - `processId := newid()`.
+    - `processId := new_uuidv4()`.
     - create the working directory `/var/lib/prn/<processId>`.
 2. Set up cgroup (v2)
     - Create `/sys/fs/cgroup/prn/<processId>/`
-    - Write limits: CPU, Memory, IO.
-3. Fork/exec with supervision
+    - Activate `cpu`, `io`, and `memory` controllers in `/sys/fs/cgroup/cgroup.controllers` 
+    - Write limits:
+      - cpu.weight = 100
+      - io.weight = 100 (applied to all devices by default)
+      - memory.high = 512Mb
+3. Start the process:
     - Use `exec.Command()`
     - Create a new process group to manage possible child processes easier.
-    - Join the cgroup by writing PID to cgroup.procs.
-4. Wire up I/O - create pipes for stdout&stderr, wrap with a ring buffer (e.g., 10–50 MB).
+    - Use [clone3](https://manpages.debian.org/testing/manpages-dev/clone3.2.en.html#CLONE_INTO_CGROUP) which is
+       [supported in Go](https://cs.opensource.google/go/go/+/refs/tags/go1.25.0:src/syscall/exec_linux.go;l=107)
+       to not let a process run without cgroup for a short period of time (which it could use to fork).
+4. Wire up I/O - create pipes for stdout&stderr
+   - constantly read stdout & stderr from pipes (to avoid blocking)
+   - append chunks of the output to a singly linked list (atomically using `atomic.Pointer`)
+   - notify the readers that new data is available (using `sync.Cond` and `Broadcast()`, need to be careful here
+     to avoid race conditions)
 5. Track process via `pidfd`.
 
 ### Stopping a job
 
-1. Write 1 to cgroup.kill (kills all descendants atomically).
+1. Write `1` to `cgroup.kill` (kills all descendants atomically).
 2. Wait for `pidfd` to signal exit, collect status, usage.
 3. Cleanup: purge cgroup, finalize logs.
 4. Leverage Reaper notion to avoid zombies.
@@ -134,7 +126,7 @@ The CLI should:
 ## Error handling
 Error handling should align with
 - [gRPC conventions](https://grpc.io/docs/guides/error/)
-- [Go conventions](https://go.dev/blog/error-handling-and-go).
+- [Go conventions](https://go.dev/blog/error-handling-and-go)
 
 ## Security
 
@@ -143,27 +135,21 @@ Error handling should align with
    and what the alternatives are.
 2. Use all the goodies Linux have to restrict the spawned process:
     - use [cgroups](https://man7.org/linux/man-pages/man7/cgroups.7.html) to limit the usage of resources (CPU, memory, disk IO, etc.)
-    - `*` run spawned processes in namespaces to isolate them from the host (possibly the server process itself as well),
-      or at least use a dedicated Linux user.
-    - `*` use [seccomp](https://blog.cloudflare.com/sandboxing-in-linux-with-zero-lines-of-code/) to restrict system calls the process can make
-    - `*` use [capabilities](https://man7.org/linux/man-pages/man7/capabilities.7.html) to restrict the process's privileges
-    - `*` limit what a client can run, e.g., a predefined list of commands. Depends on the UX and security requirements.
-    - `*` limit the number of concurrent processes to avoid resource exhaustion.
+    - more ways in the [Future improvements section](#f)
 3. Use [mTLS](https://www.cloudflare.com/en-gb/learning/access-management/what-is-mutual-tls/) to authenticate the client and the server:
     - TLS 1.3 should be enforced on both sides with no downgrade option.
     - Any cipher suite from TLS 1.3 is fine.
     - I will stick to Ed25519 for the signing keys, as it offers the best security/performance ratio IMO.
-    - Self-signed certificates seem fine given the authorization system (see below).
-    - The validity period of a certificate may be restricted and checked on both sides.
-    - `*` Having a certificate authority instead of self-signed certificates can make things easier to use, especially
-      if the number of clients is large.
-4. Use certificate pinning on both client and server side for authorization
-    - On startup the server is provided with a set of client certificates and only accepts connections from clients that are in the set.
-    - On startup the client is provided with the server certificate and only connects to the server if the server certificate matches.
-    - The server doesn't distinguish different clients, they all have the same access rights.
-    - This is the most non-versatile authorization system one can think of, yet very secure and simple.
-    - Certificate rotation and revocation are painful processes in this case.
-5. The private key is consciously passed to the binary as an environment variable. This way the secret key can be
+    - Introduce a certificate authority (CA) to sign the server and client certificates.
+    - Use short-lived (e.g., 30 minute) certificates.
+    - Use SAN in a [SPIFFE](https://spiffe.io/)-inspired manner to:
+      - attest subject's role(s) using format: `URI:role://{role}`. Available roles are: `client`, `server`.
+      - attest subject's identity using format `URI:identity://{client_id}` (useful, bot not required)
+4. Use simple hardcoded RBAC:
+    - Server allows everyone with role `client` to call any gRPC method with any arguments.
+    - Clients call gRPC methods only if the other party possesses `server` role.
+5. TLS connection should be closed when the other party's certificate is expired. 
+6. The private key is consciously passed to the binary as an environment variable. This way the secret key can be
    injected by whatever method is chosen for deployment (e.g., as a k8s secret). The server process should
    wipe the environment variable as soon as it's done reading it.
 
@@ -173,17 +159,30 @@ Error handling should align with
 - cgroups behavior tests (limits applied and enforced).
 - e2e CLI tests.
 - Output replay for late subscribers.
-- Authorization test: what happens if a client or server tries to use a secret key that doesn't match the certificate.
-- Authorization test: what happens if a client or server tries to use a certificate that's not known to the other party.
+- Authorization tests:
+  - what happens if a client or server tries to use a secret key that doesn't match the certificate
+  - what happens if a client or server tries to use a certificate signed by a non-trusted CA
+- Authorization test:
+  - what happens if a party without the `client` role tries to call a gRPC function on the server
+  - what happens if a part without the `server` role tries to accept connection from a client
 - Run race detector.
 
-## Future improvements
+## <a name="f"></a> Future improvements
 
-- `*` OpenTelemetry traces/metrics; structured logging and audit logs.
-- `*` Configurable resource limits per request and/or policy.
-- `*` gRPC compression (e.g., for GetOutput).
-- `*` [gRPC health checking](https://github.com/grpc/grpc/blob/master/doc/health-checking.md)
-- `*` Installer packaging (e.g., Homebrew).
-- `*` CLI help/manpages.
-- `*` Pin certificate fingerprint(s) instead of full certs.
-- `*` Fine‑grained RBAC/ABAC.
+- Better process isolation:
+    - run spawned processes in namespaces to isolate them from the host (possibly the server process itself as well),
+      or at least use a dedicated Linux user.
+    - use [seccomp](https://blog.cloudflare.com/sandboxing-in-linux-with-zero-lines-of-code/) to restrict system calls the process can make
+    - use [capabilities](https://man7.org/linux/man-pages/man7/capabilities.7.html) to restrict the process's privileges
+    - limit what a client can run, e.g., a predefined list of commands. Depends on the UX and security requirements.
+    - limit the number of concurrent processes to avoid resource exhaustion.
+- OpenTelemetry traces/metrics; structured logging and audit logs.
+- Create a Dockerfile for deployment.
+- Use secure key management for TLS secret key (e.g., OS keyring/KMS).
+- Configurable resource limits per request and/or policy.
+- gRPC compression (e.g., for GetOutput).
+- [gRPC health checking](https://github.com/grpc/grpc/blob/master/doc/health-checking.md)
+- Installer packaging (e.g., Homebrew).
+- CLI help/manpages.
+- Fine‑grained RBAC/ABAC.
+- Add list command.
