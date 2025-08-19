@@ -37,9 +37,8 @@ message StatusRequest {
 }
 
 message StatusResponse {
-  string identifier = 1;
-  Process process = 2;
-  ProcessStatus status = 3;
+  Process process = 1;
+  ProcessStatus status = 2;
 }
 
 message StopRequest {
