@@ -15,8 +15,8 @@ The service should:
 - be able to start a process given a command and arguments; get status; stop a process.
 - be able to stream process' stdout/stderr from the beginning. Output is binary and may or may not be a valid UTF-8 string.
 - support multiple concurrent subscribers to output, with efficient, non‑polling delivery.
-- have authentication implemented using mutual TLS.
-- have authorization implemented using RBAC.
+- have authentication via mutual TLS.
+- have authorization that limits Stop and GetStatus calls only to the creator of the process.
 - remain stateless across restarts (no persistence).
 - serve its API using [this gRPC spec](proto/v1/process_runner.proto).
 - stop all processes and clean all resources on shutdown.
@@ -42,7 +42,7 @@ The CLI should:
   > This command is not idempotent and CLI doesn't implement retries. In case of a failure, the user is responsible
   for figuring out if the process was started or not (e.g., by calling `list` command that should be added in the future).
 
-- Status
+- Status if the process was created by that client
     ```sh
     prn status fcd2310e7b9a462a5d88c3a0ff4e2d9b
   
@@ -51,6 +51,13 @@ The CLI should:
     +----------------------------------+---------+-----------------+
     | fcd2310e7b9a462a5d88c3a0ff4e2d9b | Running | ping google.com |
     +----------------------------------+---------+-----------------+
+    ```
+
+- Status if the process was created by a different client
+    ```sh
+    prn status fcd2310e7b9a462a5d88c3a0ff4e2d9b
+  
+    > Forbidden. Only the creator of the process can get its status.
     ```
 
 - Logs (full replay)
@@ -64,7 +71,7 @@ The CLI should:
     64 bytes from 142.250.203.142: icmp_seq=3 ttl=118 time=11.059 ms
     ```
 
-- Stop
+- Stop if the process was created by that client
     ```sh
     prn stop fcd2310e7b9a462a5d88c3a0ff4e2d9b
   
@@ -76,6 +83,11 @@ The CLI should:
     ```
   > This command is idempotent.
 
+- Stop if the process was created by a different client
+    ```sh
+    > Forbidden. Only the creator of the process can stop it.
+    ```
+
 - Server start
     ```sh
     prn server start
@@ -86,7 +98,6 @@ The CLI should:
 ### Environment variables
 - `PRN_TLS_KEY` is expected to contain the TLS secret key in PKCS#8 format.
 - `PRN_TLS_CERT` is expected to contain the TLS certificate in `.pem` format.
-- `PRN_TLS_CA` is expected to contain the TLS CA certificate in `.pem` format.
 - `PRN_ADDRESS` can be used to change the address of the server (defaults to `127.0.0.1:50051`)
 
 ## Process execution lifecycle
@@ -109,11 +120,14 @@ The CLI should:
     - Use [clone3](https://manpages.debian.org/testing/manpages-dev/clone3.2.en.html#CLONE_INTO_CGROUP) which is
        [supported in Go](https://cs.opensource.google/go/go/+/refs/tags/go1.25.0:src/syscall/exec_linux.go;l=107)
        to not let a process run without cgroup for a short period of time (which it could use to fork).
-4. Wire up I/O - create pipes for stdout&stderr
-   - constantly read stdout & stderr from pipes (to avoid blocking)
-   - append chunks of the output to a singly linked list (atomically using `atomic.Pointer`)
-   - notify the readers that new data is available (using `sync.Cond` and `Broadcast()`, need to be careful here
-     to avoid race conditions)
+4. Wire up I/O:
+   - create Linux pipes for stdout&stderr using `Cmd.StdoutPipe()` and `Cmd.StderrPipe()`
+   - create a goroutine for each pipe that will read from it and append new data to a single linked list dedicated
+     to that process
+   - implement that single linked list using `atomic.Pointer`. There is only one writer for that list,
+     so an atomic pointer should be enough to achieve concurrency safety.
+   - notify the readers that new data is available in the list (using `sync.Cond` and `Broadcast()`, need to be careful
+     here to avoid race conditions)
 5. Track process via `pidfd`.
 
 ### Stopping a job
@@ -140,14 +154,11 @@ Error handling should align with
     - TLS 1.3 should be enforced on both sides with no downgrade option.
     - Any cipher suite from TLS 1.3 is fine.
     - I will stick to Ed25519 for the signing keys, as it offers the best security/performance ratio IMO.
-    - Introduce a certificate authority (CA) to sign the server and client certificates.
-    - Use short-lived (e.g., 30 minute) certificates.
-    - Use SAN in a [SPIFFE](https://spiffe.io/)-inspired manner to:
-      - attest subject's role(s) using format: `URI:role://{role}`. Available roles are: `client`, `server`.
-      - attest subject's identity using format `URI:identity://{client_id}` (useful, bot not required)
-4. Use simple hardcoded RBAC:
-    - Server allows everyone with role `client` to call any gRPC method with any arguments.
-    - Clients call gRPC methods only if the other party possesses `server` role.
+    - Use self-signed certificates.
+4. Use simple authorization:
+    - Start and GetOutput calls are available to any authenticated party.
+    - Stop and GetStatus calls are available only to the party that started that process.
+    - Certificate fingerprint is used to identify the creator of a process.
 5. TLS connection should be closed when the other party's certificate is expired. 
 6. The private key is consciously passed to the binary as an environment variable. This way the secret key can be
    injected by whatever method is chosen for deployment (e.g., as a k8s secret). The server process should
@@ -159,12 +170,11 @@ Error handling should align with
 - cgroups behavior tests (limits applied and enforced).
 - e2e CLI tests.
 - Output replay for late subscribers.
-- Authorization tests:
+- Authentication tests:
   - what happens if a client or server tries to use a secret key that doesn't match the certificate
-  - what happens if a client or server tries to use a certificate signed by a non-trusted CA
+  - what happens if a client or server tries to use an expired certificate
 - Authorization test:
-  - what happens if a party without the `client` role tries to call a gRPC function on the server
-  - what happens if a part without the `server` role tries to accept connection from a client
+  - what happens if a party tries to make a GetStatus or Stop call on a process that it didn't start
 - Run race detector.
 
 ## <a name="f"></a> Future improvements
