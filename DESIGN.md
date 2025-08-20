@@ -96,9 +96,29 @@ The CLI should:
     ```
 
 ### Environment variables
+CLI supports the following environment variables for all commands:
+
+#### Mandatory
 - `PRN_TLS_KEY` is expected to contain the TLS secret key in PKCS#8 format.
 - `PRN_TLS_CERT` is expected to contain the TLS certificate in `.pem` format.
+- `PRN_CA_TLS_CERT` is expected to contain the CA TLS certificate in `.pem` format.
+
+#### Optional
 - `PRN_ADDRESS` can be used to change the address of the server (defaults to `127.0.0.1:50051`)
+
+To set the environment variables, you can either use `export` command:
+```sh
+export PRN_TLS_KEY=$(cat key.pem)
+export PRN_TLS_CERT=$(cat cert.pem)
+export PRN_CA_TLS_CERT=$(cat ca_cert.pem)
+
+prn start -- ping google.com
+```
+
+Or provide them when running the command:
+```sh
+PRN_TLS_KEY=$(cat key.pem) PRN_TLS_CERT=$(cat cert.pem) PRN_CA_TLS_CERT=$(cat ca_cert.pem) prn start -- ping google.com
+```
 
 ## Process execution lifecycle
 
@@ -154,11 +174,17 @@ Error handling should align with
     - TLS 1.3 should be enforced on both sides with no downgrade option.
     - Any cipher suite from TLS 1.3 is fine.
     - I will stick to Ed25519 for the signing keys, as it offers the best security/performance ratio IMO.
-    - Use self-signed certificates.
+    - Introduce a certificate authority (CA) to sign the server and client certificates.
+    - CA certificate may be self-signed.
+    - CA should issue certificates to clients and the server.
+    - Certificates may be long-lived (e.g., 1 year). 
+    - Server is identified as `server` and clients are identified as `client_{n}`, where `{n}` is a number.
+    - Identity is expressed as `URI:spiffe://server` and `URI:spiffe://client_{n}` strings respectively that are stored
+      inside certificate's SAN field ([SPIFFE](https://spiffe.io/)).
 4. Use simple authorization:
-    - Start and GetOutput calls are available to any authenticated party.
-    - Stop and GetStatus calls are available only to the party that started that process.
-    - Certificate fingerprint is used to identify the creator of a process.
+    - Clients call gRPC methods only if the other party's identity is `server`.
+    - Start and GetOutput calls are available to parties with `client_{n}` identity.
+    - Stop and GetStatus calls are available only to the identity that started that process.
 5. TLS connection should be closed when the other party's certificate is expired. 
 6. The private key is consciously passed to the binary as an environment variable. This way the secret key can be
    injected by whatever method is chosen for deployment (e.g., as a k8s secret). The server process should
@@ -189,6 +215,9 @@ Error handling should align with
 - OpenTelemetry traces/metrics; structured logging and audit logs.
 - Create a Dockerfile for deployment.
 - Use secure key management for TLS secret key (e.g., OS keyring/KMS).
+- Introduce a mechanism for CA to authorize clients and servers during the certificate issuance
+- Make client and server certificates short-lived (e.g., 30 minutes) to force them to rotate their key regularly, which
+  will also imply CA authorization check each time.
 - Configurable resource limits per request and/or policy.
 - gRPC compression (e.g., for GetOutput).
 - [gRPC health checking](https://github.com/grpc/grpc/blob/master/doc/health-checking.md)
