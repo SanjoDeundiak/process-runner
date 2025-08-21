@@ -104,7 +104,7 @@ CLI supports the following environment variables for all commands:
 - `PRN_CA_TLS_CERT` is expected to contain the CA TLS certificate in `.pem` format.
 
 #### Optional
-- `PRN_ADDRESS` can be used to change the address of the server (defaults to `127.0.0.1:50051`)
+- `PRN_ADDRESS` can be used to change the address of the server (defaults to `localhost:50051`)
 
 To set the environment variables, you can either use `export` command:
 ```sh
@@ -126,7 +126,7 @@ PRN_TLS_KEY=$(cat key.pem) PRN_TLS_CERT=$(cat cert.pem) PRN_CA_TLS_CERT=$(cat ca
 
 1. Allocate id and a working dir
     - `processId := new_uuidv4()`.
-    - create the working directory `/var/lib/prn/<processId>`.
+    - create the working directory `/var/lib/prn/<processId>`. // FIXME
 2. Set up cgroup (v2)
     - Create `/sys/fs/cgroup/prn/<processId>/`
     - Activate `cpu`, `io`, and `memory` controllers in `/sys/fs/cgroup/cgroup.controllers` 
@@ -147,7 +147,7 @@ PRN_TLS_KEY=$(cat key.pem) PRN_TLS_CERT=$(cat cert.pem) PRN_CA_TLS_CERT=$(cat ca
    - implement that single linked list using `atomic.Pointer`. There is only one writer for that list,
      so an atomic pointer should be enough to achieve concurrency safety.
    - notify the readers that new data is available in the list (using `sync.Cond` and `Broadcast()`, need to be careful
-     here to avoid race conditions)
+     here to avoid race conditions) // FIXME
 5. Track process via `pidfd`.
 
 ### Stopping a job
