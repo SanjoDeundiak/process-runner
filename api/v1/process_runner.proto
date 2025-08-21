@@ -1,10 +1,10 @@
 syntax = "proto3";
 
-package proto.v1;
+package api.v1;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/SanjoDeundiak/process-runner/proto/v1;protov1";
+option go_package = "github.com/SanjoDeundiak/process-runner/api/v1;apiv1";
 
 // All fields are optional per proto3 recommendations. Client and server should check correctness of data.
 
@@ -46,7 +46,8 @@ message StopRequest {
 }
 
 message StopResponse {
-  ProcessStatus process_status = 1;
+  Process process = 1;
+  ProcessStatus status = 2;
 }
 
 message GetOutputRequest {
@@ -79,9 +80,7 @@ message Process {
 enum ProcessState {
   PROCESS_STATE_UNSPECIFIED = 0;
   PROCESS_STATE_RUNNING = 1;
-  PROCESS_STATE_SLEEPING = 2;
-  PROCESS_STATE_STOPPED = 3;
-  PROCESS_STATE_ZOMBIE = 4;
+  PROCESS_STATE_STOPPED = 2;
 }
 
 // Status of a process
