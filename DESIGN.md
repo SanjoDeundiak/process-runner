@@ -182,11 +182,9 @@ Error handling should align with
     - Identity is expressed as `URI:spiffe://server` and `URI:spiffe://client_{n}` strings respectively that are stored
       inside certificate's SAN field ([SPIFFE](https://spiffe.io/)).
 4. Use simple authorization:
-    - Clients call gRPC methods only if the other party's identity is `server`.
     - Start and GetOutput calls are available to parties with `client_{n}` identity.
-    - Stop and GetStatus calls are available only to the identity that started that process.
-5. TLS connection should be closed when the other party's certificate is expired. 
-6. The private key is consciously passed to the binary as an environment variable. This way the secret key can be
+    - Stop and GetStatus calls are available only to the identity that started that process. 
+5. The private key is consciously passed to the binary as an environment variable. This way the secret key can be
    injected by whatever method is chosen for deployment (e.g., as a k8s secret). The server process should
    wipe the environment variable as soon as it's done reading it.
 
