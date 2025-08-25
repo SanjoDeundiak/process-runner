@@ -90,7 +90,7 @@ The CLI should:
 
 - Server start
     ```sh
-    prn server start
+    go run cmd/server/main.go
   
     > Listening on 127.0.0.1:50051
     ```
@@ -104,7 +104,7 @@ CLI supports the following environment variables for all commands:
 - `PRN_CA_TLS_CERT` is expected to contain the CA TLS certificate in `.pem` format.
 
 #### Optional
-- `PRN_ADDRESS` can be used to change the address of the server (defaults to `127.0.0.1:50051`)
+- `PRN_ADDRESS` can be used to change the address of the server (defaults to `localhost:50051`)
 
 To set the environment variables, you can either use `export` command:
 ```sh
@@ -120,20 +120,26 @@ Or provide them when running the command:
 PRN_TLS_KEY=$(cat key.pem) PRN_TLS_CERT=$(cat cert.pem) PRN_CA_TLS_CERT=$(cat ca_cert.pem) prn start -- ping google.com
 ```
 
+Or use `./scripts/set_env.sh` script:
+```sh
+./scripts/set_env.sh client1
+````
+
 ## Process execution lifecycle
 
 ### Starting a process
 
 1. Allocate id and a working dir
     - `processId := new_uuidv4()`.
-    - create the working directory `/var/lib/prn/<processId>`.
+    - create the working directory `/tmp/prn-<processId>`.
 2. Set up cgroup (v2)
-    - Create `/sys/fs/cgroup/prn/<processId>/`
-    - Activate `cpu`, `io`, and `memory` controllers in `/sys/fs/cgroup/cgroup.controllers` 
+    - Create `/sys/fs/cgroup/prn/` (if doesn't exist)
+    - Activate `cpu`, `io`, and `memory` controllers in `/sys/fs/cgroup/prn/cgroup.subtree_control` (if not already done)
+    - Create `/sys/fs/cgroup/prn/<processId>` (if doesn't exist)
     - Write limits:
-      - cpu.weight = 100
-      - io.weight = 100 (applied to all devices by default)
-      - memory.high = 512Mb
+      - `/sys/fs/cgroup/prn/<processId>/cpu.weight` << 100
+      - `/sys/fs/cgroup/prn/<processId>/io.weight` << 100 (applied to all devices by default)
+      - `/sys/fs/cgroup/prn/<processId>/memory.high` << 512*1024*1024
 3. Start the process:
     - Use `exec.Command()`
     - Create a new process group to manage possible child processes easier.
@@ -146,16 +152,14 @@ PRN_TLS_KEY=$(cat key.pem) PRN_TLS_CERT=$(cat cert.pem) PRN_CA_TLS_CERT=$(cat ca
      to that process
    - implement that single linked list using `atomic.Pointer`. There is only one writer for that list,
      so an atomic pointer should be enough to achieve concurrency safety.
-   - notify the readers that new data is available in the list (using `sync.Cond` and `Broadcast()`, need to be careful
-     here to avoid race conditions)
+   - notify the readers that new data is available in the list by implementing Broadcaster notion using go channels.
 5. Track process via `pidfd`.
 
 ### Stopping a job
 
 1. Write `1` to `cgroup.kill` (kills all descendants atomically).
-2. Wait for `pidfd` to signal exit, collect status, usage.
-3. Cleanup: purge cgroup, finalize logs.
-4. Leverage Reaper notion to avoid zombies.
+2. Wait for `pidfd` to exit.
+3. Cleanup: purge cgroup.
 
 ## Error handling
 Error handling should align with
@@ -182,11 +186,9 @@ Error handling should align with
     - Identity is expressed as `URI:spiffe://server` and `URI:spiffe://client_{n}` strings respectively that are stored
       inside certificate's SAN field ([SPIFFE](https://spiffe.io/)).
 4. Use simple authorization:
-    - Clients call gRPC methods only if the other party's identity is `server`.
     - Start and GetOutput calls are available to parties with `client_{n}` identity.
-    - Stop and GetStatus calls are available only to the identity that started that process.
-5. TLS connection should be closed when the other party's certificate is expired. 
-6. The private key is consciously passed to the binary as an environment variable. This way the secret key can be
+    - Stop and GetStatus calls are available only to the identity that started that process. 
+5. The private key is consciously passed to the binary as an environment variable. This way the secret key can be
    injected by whatever method is chosen for deployment (e.g., as a k8s secret). The server process should
    wipe the environment variable as soon as it's done reading it.
 

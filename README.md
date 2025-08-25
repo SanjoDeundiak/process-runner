@@ -4,23 +4,21 @@ This is a utility to run processes remotely.
 ## Design
 Refer to [design.md](./DESIGN.md)
 
-## Local testing
+## Instructions
 
-### Generate a secret key
+Run from root of repository to generate all required keys and certificates:
+
 ```sh
-openssl genpkey -algorithm Ed25519 -out server_key.pem
-chmod 600 server_key.pem
+./scripts/generate_all.sh
 ```
 
-### Generate a self-signed certificate
+To set up env variables to run as a specific actor there is a small script:
+
 ```sh
-openssl req -new -x509 -key server_key.pem -out server.pem \
-    -days 7 \
-    -subj "/CN=localhost" \
-    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1"
+./scripts/set_evn.sh {NAME}
 ```
 
-### Export secret key as an env var
-```sh
-export TLS_KEY="$(cat ./server_key.pem)"
-```
+Possible valid values for `{NAME}` are:
+ - server
+ - client1
+ - client2
