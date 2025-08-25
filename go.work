@@ -1,0 +1,9 @@
+go 1.25
+
+use (
+	./api
+	./cmd/cli
+	./cmd/server
+	./pkg/lib
+	./test
+)
